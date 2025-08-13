@@ -12,6 +12,7 @@ if not pm.is_installed("ollama"):
     pm.install("ollama")
 
 import ollama
+import time
 
 from tenacity import (
     retry,
@@ -28,7 +29,7 @@ from lightrag.api import __api_version__
 
 import numpy as np
 from typing import Union
-from lightrag.utils import logger
+from lightrag.utils import logger, TokenTracker
 
 
 @retry(
@@ -43,6 +44,7 @@ async def _ollama_model_if_cache(
     prompt,
     system_prompt=None,
     history_messages=[],
+    token_tracker: TokenTracker | None = None,
     **kwargs,
 ) -> Union[str, AsyncIterator[str]]:
     stream = True if kwargs.get("stream") else False
@@ -51,7 +53,8 @@ async def _ollama_model_if_cache(
     # kwargs.pop("response_format", None) # allow json
     host = kwargs.pop("host", None)
     timeout = kwargs.pop("timeout", None)
-    kwargs.pop("hashing_kv", None)
+    hashing_kv = kwargs.pop("hashing_kv", None)
+    operation_type = kwargs.pop("operation_type", None)
     api_key = kwargs.pop("api_key", None)
     headers = {
         "Content-Type": "application/json",
@@ -69,18 +72,60 @@ async def _ollama_model_if_cache(
         messages.extend(history_messages)
         messages.append({"role": "user", "content": prompt})
 
+        if not operation_type or operation_type == "general_completion":
+            combined_prompt = f"{system_prompt or ''} {prompt}".lower()
+            if "extract" in combined_prompt:
+                operation_type = "entity_extraction"
+            elif "relationship" in combined_prompt:
+                operation_type = "relationship_extraction"
+            elif "query" in combined_prompt or "question" in combined_prompt:
+                operation_type = "query_response"
+            else:
+                operation_type = "general_completion"
+
         response = await ollama_client.chat(model=model, messages=messages, **kwargs)
         if stream:
             """cannot cache stream response and process reasoning"""
 
             async def inner():
+                final_chunk = None
+                start_time = time.time()
                 try:
                     async for chunk in response:
+                        if chunk.get("done"):
+                            final_chunk = chunk
+                            continue
                         yield chunk["message"]["content"]
                 except Exception as e:
                     logger.error(f"Error in stream response: {str(e)}")
                     raise
                 finally:
+                    if token_tracker and final_chunk:
+                        prompt_tokens = final_chunk.get("prompt_eval_count", 0)
+                        completion_tokens = final_chunk.get("eval_count", 0)
+                        total_tokens = prompt_tokens + completion_tokens
+                        total_duration = final_chunk.get("total_duration")
+                        call_time = (
+                            total_duration / 1e9
+                            if total_duration is not None
+                            else time.time() - start_time
+                        )
+                        token_counts = {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": total_tokens,
+                        }
+                        token_tracker.add_usage(
+                            token_counts=token_counts,
+                            call_time=call_time,
+                            model_name=model,
+                            operation_type=operation_type,
+                        )
+                        logger.info(
+                            f"Ollama Streaming Token Usage - Model: {model}, Operation: {operation_type}, "
+                            f"Time: {call_time:.2f}s, Prompt: {prompt_tokens}, Completion: {completion_tokens}, "
+                            f"Total: {total_tokens}, Speed: {total_tokens/max(call_time,1e-6):.1f} tokens/s"
+                        )
                     try:
                         await ollama_client._client.aclose()
                         logger.debug("Successfully closed Ollama client for streaming")
@@ -96,6 +141,42 @@ async def _ollama_model_if_cache(
             this information is not needed for the final
             response and can simply be trimmed.
             """
+            if token_tracker:
+                prompt_tokens = response.get("prompt_eval_count")
+                completion_tokens = response.get("eval_count")
+                if prompt_tokens is None or completion_tokens is None:
+                    tokenizer = (
+                        hashing_kv.global_config.get("tokenizer")
+                        if hashing_kv
+                        else None
+                    )
+                    prompt_text = " ".join(m.get("content", "") for m in messages)
+                    if tokenizer:
+                        prompt_tokens = len(tokenizer.encode(prompt_text))
+                        completion_tokens = len(tokenizer.encode(model_response))
+                    else:
+                        prompt_tokens = int(len(prompt_text.split()) * 1.3)
+                        completion_tokens = int(len(model_response.split()) * 1.3)
+                total_tokens = prompt_tokens + completion_tokens
+                total_duration = response.get("total_duration")
+                call_time = total_duration / 1e9 if total_duration is not None else 0.0
+                call_time = max(call_time, 1e-6)
+                token_counts = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                }
+                token_tracker.add_usage(
+                    token_counts=token_counts,
+                    call_time=call_time,
+                    model_name=model,
+                    operation_type=operation_type,
+                )
+                logger.info(
+                    f"Ollama Token Usage - Model: {model}, Operation: {operation_type}, "
+                    f"Time: {call_time:.2f}s, Prompt: {prompt_tokens}, Completion: {completion_tokens}, "
+                    f"Total: {total_tokens}, Speed: {total_tokens/call_time:.1f} tokens/s"
+                )
 
             return model_response
     except Exception as e:

@@ -461,6 +461,8 @@ rag = LightRAG(
 )
 ```
 
+When used with the `TokenTracker`, Ollama calls now report prompt, completion, and total token usage automatically, similar to the OpenAI and WatsonX integrations.
+
 * **Increasing context size**
 
 In order for LightRAG to work context should be at least 32k tokens. By default Ollama models have context size of 8k. You can achieve this using one of two ways:
