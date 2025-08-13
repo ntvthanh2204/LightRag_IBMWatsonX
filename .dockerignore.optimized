@@ -1,0 +1,109 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+Dockerfile.*
+docker-compose*.yml
+.dockerignore
+
+# Logs
+logs/
+*.log
+
+# Data directories (mount as volumes instead)
+data/
+rag_storage/
+inputs/
+
+# Documentation
+docs/
+*.md
+LICENSE
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Coverage reports
+htmlcov/
+.coverage
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints
+
+# Large model files
+*.bin
+*.safetensors
+models/
+
+# Temporary files
+tmp/
+temp/
+.tmp/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log
+
+# Examples (optional - uncomment if not needed in container)
+# examples/
+# reproduce/
+
+# Monitoring configs (mount separately)
+monitoring/
+
+# Environment files (will be passed as env vars)
+.env*
+!.env.example

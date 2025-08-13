@@ -1,0 +1,96 @@
+# Optimized Dockerfile for LightRAG with WatsonX
+FROM python:3.11-slim
+
+LABEL maintainer="LightRAG Team"
+LABEL description="LightRAG with WatsonX support and token tracking"
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Upgrade pip and install wheel for faster builds
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Copy requirements first for better Docker layer caching
+COPY pyproject.toml setup.py ./
+COPY lightrag/ ./lightrag/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -e .
+
+# Install additional dependencies for LightRAG API
+RUN pip install --no-cache-dir -e .[api]
+
+# Install storage dependencies
+RUN pip install --no-cache-dir \
+    nano-vectordb \
+    networkx \
+    faiss-cpu \
+    qdrant-client \
+    redis \
+    pymongo
+
+# Install LLM dependencies (including WatsonX)
+RUN pip install --no-cache-dir \
+    openai \
+    anthropic \
+    google-generativeai \
+    tiktoken \
+    httpx \
+    tenacity
+
+# Install document processing dependencies
+RUN pip install --no-cache-dir \
+    pypdf2 \
+    python-docx \
+    python-pptx \
+    openpyxl \
+    pillow
+
+# Install monitoring and utilities
+RUN pip install --no-cache-dir \
+    python-dotenv \
+    nest-asyncio \
+    tqdm
+
+# Create necessary directories
+RUN mkdir -p /app/data/rag_storage \
+    /app/data/inputs \
+    /app/logs
+
+# Copy configuration files
+COPY config.ini.example /app/config.ini
+COPY production.env /app/.env.example
+
+# Set environment variables
+ENV WORKING_DIR=/app/data/rag_storage
+ENV INPUT_DIR=/app/data/inputs
+ENV LOG_DIR=/app/logs
+ENV PYTHONPATH=/app
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Expose ports
+EXPOSE 9621 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9621/health || exit 1
+
+# Create non-root user for security
+RUN groupadd -r lightrag && useradd -r -g lightrag lightrag
+RUN chown -R lightrag:lightrag /app
+USER lightrag
+
+# Set entrypoint
+ENTRYPOINT ["python", "-m", "lightrag.api.lightrag_server"]
+CMD ["--host", "0.0.0.0", "--port", "9621"]
