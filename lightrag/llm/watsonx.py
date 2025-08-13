@@ -282,6 +282,11 @@ class WatsonXLLM:
                 )
                 
                 # Always log token usage (not just in verbose mode)
+                speed_info = (
+                    f"{token_counts['total_tokens']/total_time:.1f} tokens/s"
+                    if total_time and total_time > 0
+                    else "N/A tokens/s"
+                )
                 logger.info(
                     f"WatsonX Token Usage - Model: {self.model_id}, "
                     f"Operation: {operation_type}, "
@@ -289,7 +294,7 @@ class WatsonXLLM:
                     f"Prompt: {token_counts['prompt_tokens']}, "
                     f"Completion: {token_counts['completion_tokens']}, "
                     f"Total: {token_counts['total_tokens']}, "
-                    f"Speed: {token_counts['total_tokens']/total_time:.1f} tokens/s"
+                    f"Speed: {speed_info}"
                 )
             
             # Always log response structure for debugging until we fix the parsing
