@@ -179,6 +179,10 @@ async def openai_complete_if_cache(
     messages = kwargs.pop("messages", messages)
 
     try:
+        # Time the API call for token tracking
+        import time
+        api_start_time = time.time()
+        
         # Don't use async with context manager, use client directly
         if "response_format" in kwargs:
             response = await openai_async_client.beta.chat.completions.parse(
@@ -188,6 +192,9 @@ async def openai_complete_if_cache(
             response = await openai_async_client.chat.completions.create(
                 model=model, messages=messages, **kwargs
             )
+        
+        api_end_time = time.time()
+        api_call_time = api_end_time - api_start_time
     except APIConnectionError as e:
         logger.error(f"OpenAI API Connection Error: {e}")
         await openai_async_client.close()  # Ensure client is closed
@@ -249,13 +256,27 @@ async def openai_complete_if_cache(
                     # Use actual usage from the API
                     token_counts = {
                         "prompt_tokens": getattr(final_chunk_usage, "prompt_tokens", 0),
-                        "completion_tokens": getattr(
-                            final_chunk_usage, "completion_tokens", 0
-                        ),
+                        "completion_tokens": getattr(final_chunk_usage, "completion_tokens", 0),
                         "total_tokens": getattr(final_chunk_usage, "total_tokens", 0),
                     }
-                    token_tracker.add_usage(token_counts)
-                    logger.debug(f"Streaming token usage (from API): {token_counts}")
+                    elapsed = max(time.time() - stream_start_time, 1e-6)
+                    # truyền thời gian + metadata cơ bản
+                    if hasattr(token_tracker, 'add_usage') and callable(token_tracker.add_usage):
+                        token_tracker.add_usage(
+                            token_counts=token_counts,
+                            call_time=elapsed,
+                            model_name=model,
+                            operation_type="streaming_completion"
+                        )
+                    else:
+                        token_tracker.add_usage(token_counts)
+                    logger.info(
+                        f"OpenAI Streaming Usage - Model: {model}, Time: {elapsed:.2f}s, "
+                        f"Prompt: {token_counts['prompt_tokens']}, "
+                        f"Completion: {token_counts['completion_tokens']}, "
+                        f"Total: {token_counts['total_tokens']}, "
+                        f"Speed: {token_counts['total_tokens']/elapsed:.1f} tokens/s"
+                    )
                 elif token_tracker:
                     logger.debug("No usage information available in streaming response")
             except Exception as e:
@@ -323,18 +344,50 @@ async def openai_complete_if_cache(
                 await openai_async_client.close()  # Ensure client is closed
                 raise InvalidResponseError("Received empty content from OpenAI API")
 
-            if r"\u" in content:
-                content = safe_unicode_decode(content.encode("utf-8"))
-
             if token_tracker and hasattr(response, "usage"):
                 token_counts = {
                     "prompt_tokens": getattr(response.usage, "prompt_tokens", 0),
-                    "completion_tokens": getattr(
-                        response.usage, "completion_tokens", 0
-                    ),
+                    "completion_tokens": getattr(response.usage, "completion_tokens", 0),
                     "total_tokens": getattr(response.usage, "total_tokens", 0),
                 }
-                token_tracker.add_usage(token_counts)
+                logger.info(
+                    f"✅ OpenAI Token usage found: Prompt={token_counts['prompt_tokens']}, "
+                    f"Completion={token_counts['completion_tokens']}, Total={token_counts['total_tokens']}"
+                )
+
+                # Xác định operation_type như cũ…
+                operation_type = kwargs.get('operation_type', 'general_completion')
+                if not operation_type or operation_type == 'general_completion':
+                    combined_prompt = f"{system_prompt or ''} {prompt}".lower()
+                    if "extract" in combined_prompt:
+                        operation_type = "entity_extraction"
+                    elif "relationship" in combined_prompt:
+                        operation_type = "relationship_extraction"
+                    elif "query" in combined_prompt or "question" in combined_prompt:
+                        operation_type = "query_response"
+                    else:
+                        operation_type = "general_completion"
+
+                # Dùng thời gian đo được ở trên
+                call_time = max(api_call_time, 1e-6)
+
+                if hasattr(token_tracker, 'add_usage') and callable(token_tracker.add_usage):
+                    token_tracker.add_usage(
+                        token_counts=token_counts,
+                        call_time=call_time,
+                        model_name=model,
+                        operation_type=operation_type
+                    )
+                else:
+                    token_tracker.add_usage(token_counts)
+
+                speed = token_counts['total_tokens'] / call_time
+                logger.info(
+                    f"OpenAI Token Usage - Model: {model}, Operation: {operation_type}, "
+                    f"Time: {call_time:.2f}s, Prompt: {token_counts['prompt_tokens']}, "
+                    f"Completion: {token_counts['completion_tokens']}, "
+                    f"Total: {token_counts['total_tokens']}, Speed: {speed:.1f} tokens/s"
+                )
 
             logger.debug(f"Response content len: {len(content)}")
             verbose_debug(f"Response: {response}")

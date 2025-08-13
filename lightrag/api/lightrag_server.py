@@ -274,6 +274,14 @@ def create_app(args):
         else:
             kwargs["temperature"] = args.temperature
 
+        # Pass TokenTracker if available from app instance  
+        token_tracker = None
+        if hasattr(global_args, 'rag') and global_args.rag and hasattr(global_args.rag, 'token_tracker'):
+            token_tracker = global_args.rag.token_tracker
+        
+        # Debug log to check TokenTracker availability
+        logger.info(f"🔍 OPENAI DEBUG: TokenTracker available: {token_tracker is not None}")
+        
         return await openai_complete_if_cache(
             args.llm_model,
             prompt,
@@ -281,6 +289,7 @@ def create_app(args):
             history_messages=history_messages,
             base_url=args.llm_binding_host,
             api_key=args.llm_binding_api_key,
+            token_tracker=token_tracker,
             **kwargs,
         )
 
