@@ -328,6 +328,20 @@ def create_app(args):
         kwargs["temperature"] = kwargs.get("temperature", args.temperature)
         kwargs["max_tokens"] = kwargs.get("max_tokens", args.max_tokens)
 
+        # Pass TokenTracker if available from app instance
+        token_tracker = None
+        if hasattr(args, 'rag') and args.rag and hasattr(args.rag, 'token_tracker'):
+            token_tracker = args.rag.token_tracker
+        else:
+            # Try to get from global scope
+            try:
+                token_tracker = rag.token_tracker if 'rag' in globals() and hasattr(rag, 'token_tracker') else None
+            except:
+                token_tracker = None
+        
+        # Debug log to check TokenTracker availability
+        logger.info(f"🔍 SERVER DEBUG: TokenTracker available: {token_tracker is not None}")
+        
         return await watsonx_llm_acomplete(
             prompt,
             system_prompt=system_prompt,
@@ -336,6 +350,7 @@ def create_app(args):
             project_id=os.getenv("WATSONX_PROJECT_ID"),
             model_id=args.llm_model,
             base_url=args.llm_binding_host,
+            token_tracker=token_tracker,
             **kwargs,
         )
 
@@ -412,6 +427,10 @@ def create_app(args):
         name=args.simulated_model_name, tag=args.simulated_model_tag
     )
 
+    # Initialize TokenTracker for detailed monitoring
+    from lightrag.utils import TokenTracker
+    token_tracker = TokenTracker()
+    
     # Initialize RAG
     if args.llm_binding in ["lollms", "ollama", "openai", "watsonx"]:
         rag = LightRAG(
@@ -453,6 +472,12 @@ def create_app(args):
             addon_params={"language": args.summary_language},
             ollama_server_infos=ollama_server_infos,
         )
+        
+        # Attach TokenTracker to rag instance for access in model functions
+        rag.token_tracker = token_tracker
+        
+        # Store rag instance in global_args for access in model functions
+        global_args.rag = rag
     else:  # azure_openai
         rag = LightRAG(
             working_dir=args.working_dir,

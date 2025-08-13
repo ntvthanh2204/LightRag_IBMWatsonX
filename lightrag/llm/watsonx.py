@@ -53,7 +53,7 @@ class WatsonXLLM:
         model_id: str = "openai/gpt-oss-120b",
         base_url: str = "https://us-south.ml.cloud.ibm.com/ml/v1",
         iam_url: str = "https://iam.cloud.ibm.com/identity/token",
-        max_tokens: int = 2000,
+        max_tokens: int = 8000,
         temperature: float = 0.7,
         token_tracker: Optional[TokenTracker] = None,
         **kwargs
@@ -170,7 +170,7 @@ class WatsonXLLM:
             "top_p": kwargs.get("top_p", 1)
         }
         
-        url = f"{self.base_url}/text/chat?version=2023-05-29"
+        url = f"{self.base_url}/text/chat?version=2025-07-29"
         
         if verbose_debug:
             logger.info(f"Making request to WatsonX: {url}")
@@ -194,8 +194,18 @@ class WatsonXLLM:
             if verbose_debug:
                 logger.debug(f"WatsonX response: {json.dumps(result, indent=2)}")
                 logger.info(f"WatsonX API timing - Total: {total_time:.2f}s, API Call: {api_call_time:.2f}s")
+            else:
+                # Always log response structure for debugging until we fix the parsing
+                logger.info(f"WatsonX response keys: {list(result.keys())}")
+                if "choices" in result and len(result["choices"]) > 0:
+                    choice_keys = list(result["choices"][0].keys())
+                    logger.info(f"WatsonX choices[0] keys: {choice_keys}")
+                    if "message" in result["choices"][0]:
+                        message_keys = list(result["choices"][0]["message"].keys())
+                        logger.info(f"WatsonX message keys: {message_keys}")
             
             # Track token usage with timing if tracker is available
+            logger.info(f"🔍 DEBUG: TokenTracker status - Available: {self.token_tracker is not None}")
             if self.token_tracker:
                 if "usage" in result:
                     usage = result["usage"]
@@ -204,6 +214,8 @@ class WatsonXLLM:
                         "completion_tokens": usage.get("completion_tokens", 0),
                         "total_tokens": usage.get("total_tokens", 0)
                     }
+                    # Show the token usage we found
+                    logger.info(f"✅ Token usage found: Prompt={token_counts['prompt_tokens']}, Completion={token_counts['completion_tokens']}, Total={token_counts['total_tokens']}")
                 else:
                     # Fallback estimation if usage not provided
                     prompt_text = " ".join([msg.get("content", "") for msg in formatted_messages if isinstance(msg.get("content"), str)])
@@ -217,11 +229,30 @@ class WatsonXLLM:
                 # Extract completion text first to estimate completion tokens
                 completion_text = ""
                 if "choices" in result and len(result["choices"]) > 0:
-                    content = result["choices"][0]["message"]["content"]
-                    if isinstance(content, list) and len(content) > 0:
-                        completion_text = content[0].get("text", "")
-                    elif isinstance(content, str):
-                        completion_text = content
+                    choice = result["choices"][0]
+                    if "message" in choice:
+                        message = choice["message"]
+                        # Try different message content fields
+                        if "content" in message:
+                            content = message["content"]
+                            if isinstance(content, list) and len(content) > 0:
+                                completion_text = content[0].get("text", "")
+                            elif isinstance(content, str):
+                                completion_text = content
+                        elif "text" in message:
+                            completion_text = message["text"]
+                        elif "generated_text" in message:
+                            completion_text = message["generated_text"]
+                    elif "text" in choice:
+                        completion_text = choice["text"]
+                    elif "generated_text" in choice:
+                        completion_text = choice["generated_text"]
+                elif "results" in result and len(result["results"]) > 0:
+                    completion_text = result["results"][0].get("generated_text", "")
+                elif "generated_text" in result:
+                    completion_text = result["generated_text"]
+                elif "text" in result:
+                    completion_text = result["text"]
                 
                 # Update completion tokens if not provided
                 if "usage" not in result and completion_text:
@@ -250,26 +281,99 @@ class WatsonXLLM:
                     operation_type=operation_type
                 )
                 
-                if verbose_debug:
-                    logger.info(
-                        f"WatsonX Token Usage - Model: {self.model_id}, "
-                        f"Operation: {operation_type}, "
-                        f"Time: {total_time:.2f}s, "
-                        f"Prompt: {token_counts['prompt_tokens']}, "
-                        f"Completion: {token_counts['completion_tokens']}, "
-                        f"Total: {token_counts['total_tokens']}, "
-                        f"Speed: {token_counts['total_tokens']/total_time:.1f} tokens/s"
-                    )
+                # Always log token usage (not just in verbose mode)
+                logger.info(
+                    f"WatsonX Token Usage - Model: {self.model_id}, "
+                    f"Operation: {operation_type}, "
+                    f"Time: {total_time:.2f}s, "
+                    f"Prompt: {token_counts['prompt_tokens']}, "
+                    f"Completion: {token_counts['completion_tokens']}, "
+                    f"Total: {token_counts['total_tokens']}, "
+                    f"Speed: {token_counts['total_tokens']/total_time:.1f} tokens/s"
+                )
             
-            # Extract the completion text
+            # Always log response structure for debugging until we fix the parsing
+            logger.info(f"WatsonX response keys: {list(result.keys())}")
             if "choices" in result and len(result["choices"]) > 0:
-                content = result["choices"][0]["message"]["content"]
-                if isinstance(content, list) and len(content) > 0:
-                    return content[0].get("text", "")
-                elif isinstance(content, str):
-                    return content
+                choice_keys = list(result["choices"][0].keys())
+                logger.info(f"WatsonX choices[0] keys: {choice_keys}")
+                if "message" in result["choices"][0]:
+                    message_keys = list(result["choices"][0]["message"].keys())
+                    logger.info(f"WatsonX message keys: {message_keys}")
+                    logger.info(f"WatsonX message content: {result['choices'][0]['message']}")
             
-            raise WatsonXError("Unexpected response format from WatsonX API")
+            # Check for the specific issue where WatsonX returns empty content due to length limit
+            if "choices" in result and len(result["choices"]) > 0:
+                choice = result["choices"][0]
+                finish_reason = choice.get("finish_reason", "")
+                
+                if finish_reason == "length" and "usage" in result:
+                    usage = result["usage"]
+                    max_tokens_used = usage.get("completion_tokens", 0)
+                    logger.error(f"WatsonX hit token limit! Used {max_tokens_used} completion tokens. Need to increase max_tokens parameter.")
+                    logger.error(f"Current max_tokens setting appears to be: {self.max_tokens}")
+                    
+                    # Check if this is a config issue
+                    if max_tokens_used >= 2000 and self.max_tokens > 2000:
+                        logger.error(f"BUG: Container not using updated max_tokens={self.max_tokens}. Still using 2000 limit!")
+                
+                # Log the actual message content structure
+                if "message" in choice:
+                    message = choice["message"]
+                    logger.error(f"Message structure: {json.dumps(message, indent=2)}")
+                    
+                    # The issue: message only contains {'role': 'assistant'} with no content
+                    # This means the model generated no actual text, possibly due to prompt issues
+                    if len(message.keys()) == 1 and "role" in message:
+                        logger.error("CRITICAL: WatsonX model returned no content - only role field!")
+                        logger.error("This suggests prompt formatting issues or model configuration problems")
+                        
+                        # Try to provide a meaningful fallback
+                        if finish_reason == "length":
+                            logger.error("Model hit length limit before generating any content - increase max_tokens")
+                            # Return empty string to prevent crash, but log the issue
+                            return ""
+                        
+            # Still try to extract text, but with better error handling
+            completion_text = None
+            
+            # Try every possible way to extract text from WatsonX response
+            if "choices" in result and len(result["choices"]) > 0:
+                choice = result["choices"][0]
+                
+                # Try message fields with better error handling
+                if "message" in choice:
+                    message = choice["message"]
+                    for field in ["content", "text", "generated_text", "output", "assistant", "response"]:
+                        if field in message and message[field]:
+                            content = message[field]
+                            if isinstance(content, str) and content.strip():
+                                completion_text = content
+                                logger.info(f"Found completion text in choices[0].message.{field}")
+                                break
+                            elif isinstance(content, list) and len(content) > 0:
+                                if isinstance(content[0], dict) and "text" in content[0] and content[0]["text"].strip():
+                                    completion_text = content[0]["text"]
+                                    logger.info(f"Found completion text in choices[0].message.{field}[0].text")
+                                    break
+                                elif isinstance(content[0], str) and content[0].strip():
+                                    completion_text = content[0]
+                                    logger.info(f"Found completion text in choices[0].message.{field}[0]")
+                                    break
+            
+            if completion_text and completion_text.strip():
+                return completion_text.strip()
+            
+            # If we get here, the model is not generating content properly
+            logger.error(f"FATAL: WatsonX model is not generating any text content")
+            logger.error(f"This is likely due to:")
+            logger.error(f"1. max_tokens too small (current: {self.max_tokens})")
+            logger.error(f"2. Prompt formatting issues")
+            logger.error(f"3. Model configuration problems")
+            logger.error(f"Response finish_reason: {choice.get('finish_reason', 'unknown') if 'choices' in result and result['choices'] else 'no_choices'}")
+            
+            # Return empty string instead of crashing to help debug
+            return ""
             
         except httpx.HTTPStatusError as e:
             logger.error(f"WatsonX API error: {e.response.status_code} - {e.response.text}")
@@ -321,7 +425,7 @@ async def watsonx_llm_acomplete(
         model_id=model_id,
         base_url=base_url,
         token_tracker=token_tracker,
-        max_tokens=kwargs.get('max_tokens', 2000),
+        max_tokens=kwargs.get('max_tokens', 8000),
         temperature=kwargs.get('temperature', 0.7),
         iam_url=kwargs.get('iam_url', 'https://iam.cloud.ibm.com/identity/token'),
         **llm_kwargs

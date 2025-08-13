@@ -2,12 +2,13 @@ services:
   lightrag:
     container_name: lightrag
     image: reg.securityzone.vn/lightrag/lightrag_watsonx:latest
+    user: "0:0"
     ports:
       - "${PORT:-9621}:9621"
     volumes:
       - ./data/rag_storage:/app/data/rag_storage
       - ./data/inputs:/app/data/inputs
-      - ./data/tiktoken:/app/data/tiktoken
+      - tiktoken-cache:/app/data/tiktoken
       - ./.env:/app/.env
     env_file:
       - .env
@@ -16,3 +17,7 @@ services:
     restart: unless-stopped
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+    
+volumes:
+  tiktoken-cache:

@@ -1,0 +1,25 @@
+ 
+  services:
+    lightrag:
+      container_name: lightrag-local 
+      build:
+        context: .
+        dockerfile: Dockerfile.optimized
+      user: "0:0"
+      ports:
+        - "${PORT:-9621}:9621"
+      volumes:
+        - ./data/rag_storage:/app/data/rag_storage
+        - ./data/inputs:/app/data/inputs
+        - tiktoken-cache:/app/data/tiktoken
+        - ./.env:/app/.env
+      env_file:
+        - .env
+      environment:
+        - TIKTOKEN_CACHE_DIR=/app/data/tiktoken
+      restart: unless-stopped
+      extra_hosts:
+        - "host.docker.internal:host-gateway"
+
+  volumes:
+    tiktoken-cache:
