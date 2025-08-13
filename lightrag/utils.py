@@ -1707,6 +1707,8 @@ class TokenTracker:
             self.max_time = max(self.max_time, call_time)
 
         # Record detailed call history
+        tokens_per_second = total_tokens / call_time if call_time and call_time > 0 else None
+
         call_record = {
             "timestamp": datetime.now().isoformat(),
             "call_number": self.call_count,
@@ -1716,20 +1718,21 @@ class TokenTracker:
             "call_time": call_time,
             "model_name": model_name,
             "operation_type": operation_type,
-            "tokens_per_second": total_tokens / call_time if call_time and call_time > 0 else None
+            "tokens_per_second": tokens_per_second
         }
         
         self.call_history.append(call_record)
 
         # Log each call if enabled
         if self.log_each_call and call_time is not None:
+            speed_info = f"{tokens_per_second:.1f} tokens/s" if tokens_per_second else "N/A tokens/s"
             logger.info(
                 f"🔤 LLM Call #{self.call_count} | "
                 f"Model: {model_name or 'Unknown'} | "
                 f"Operation: {operation_type or 'Unknown'} | "
                 f"Time: {call_time:.2f}s | "
                 f"Tokens: {total_tokens} | "
-                f"Speed: {total_tokens/call_time:.1f} tokens/s | "
+                f"Speed: {speed_info} | "
                 f"Prompt: {prompt_tokens} | "
                 f"Completion: {completion_tokens}"
             )
@@ -1898,6 +1901,8 @@ class EmbeddingTracker:
 
         # Log each call if enabled
         if self.log_each_call and call_time is not None:
+            text_speed_info = f"{texts_per_second:.1f} texts/s" if texts_per_second else "N/A texts/s"
+            token_speed_info = f"{tokens_per_second:.1f} tokens/s" if tokens_per_second else "N/A tokens/s"
             logger.info(
                 f"🔢 Embedding Call #{self.embedding_calls} | "
                 f"Model: {model_name or 'Unknown'} | "
@@ -1907,7 +1912,7 @@ class EmbeddingTracker:
                 f"Chars: {total_chars:,} | "
                 f"Tokens: {tokens_used:,} | "
                 f"Dim: {embedding_dim} | "
-                f"Speed: {texts_per_second:.1f} texts/s, {tokens_per_second:.1f} tokens/s"
+                f"Speed: {text_speed_info}, {token_speed_info}"
             )
 
     def get_usage(self):
