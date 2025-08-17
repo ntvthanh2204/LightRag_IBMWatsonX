@@ -160,6 +160,9 @@ async def openai_complete_if_cache(
     # Remove special kwargs that shouldn't be passed to OpenAI
     kwargs.pop("hashing_kv", None)
     kwargs.pop("keyword_extraction", None)
+    # Extract operation_type for logging but don't pass it to OpenAI API
+    operation_type = kwargs.pop("operation_type", None)
+    logger.info(f"🔍 OpenAI DEBUG: operation_type = {operation_type}")
 
     # Prepare messages
     messages: list[dict[str, Any]] = []
@@ -184,6 +187,10 @@ async def openai_complete_if_cache(
         api_start_time = time.time()
         
         # Don't use async with context manager, use client directly
+        # Add stream_options for usage tracking if streaming
+        if kwargs.get("stream", False):
+            kwargs["stream_options"] = {"include_usage": True}
+            
         if "response_format" in kwargs:
             response = await openai_async_client.beta.chat.completions.parse(
                 model=model, messages=messages, **kwargs
@@ -220,6 +227,9 @@ async def openai_complete_if_cache(
             # Track if we've started iterating
             iteration_started = False
             final_chunk_usage = None
+            # Track streaming time for token usage
+            import time
+            stream_start_time = time.time()
 
             try:
                 iteration_started = True
@@ -252,6 +262,7 @@ async def openai_complete_if_cache(
                     yield content
 
                 # After streaming is complete, track token usage
+                logger.info(f"🔍 Streaming DEBUG: token_tracker={token_tracker is not None}, final_chunk_usage={final_chunk_usage is not None}")
                 if token_tracker and final_chunk_usage:
                     # Use actual usage from the API
                     token_counts = {
@@ -260,13 +271,29 @@ async def openai_complete_if_cache(
                         "total_tokens": getattr(final_chunk_usage, "total_tokens", 0),
                     }
                     elapsed = max(time.time() - stream_start_time, 1e-6)
+                    # Use operation_type from extracted value, fallback to detection for streaming
+                    streaming_operation_type = operation_type
+                    logger.info(f"🔍 Streaming DEBUG: initial operation_type = {streaming_operation_type}")
+                    if not streaming_operation_type or streaming_operation_type == 'general_completion':
+                        combined_prompt = f"{system_prompt or ''} {prompt}".lower()
+                        logger.info(f"🔍 Streaming DEBUG: combined_prompt = {combined_prompt[:100]}...")
+                        if "extract" in combined_prompt:
+                            streaming_operation_type = "entity_extraction"
+                        elif "relationship" in combined_prompt:
+                            streaming_operation_type = "relationship_extraction"
+                        elif "query" in combined_prompt or "question" in combined_prompt:
+                            streaming_operation_type = "query_response"
+                        else:
+                            streaming_operation_type = "streaming_completion"
+                    logger.info(f"🔍 Streaming DEBUG: final operation_type = {streaming_operation_type}")
+                    
                     # truyền thời gian + metadata cơ bản
                     if hasattr(token_tracker, 'add_usage') and callable(token_tracker.add_usage):
                         token_tracker.add_usage(
                             token_counts=token_counts,
                             call_time=elapsed,
                             model_name=model,
-                            operation_type="streaming_completion"
+                            operation_type=streaming_operation_type
                         )
                     else:
                         token_tracker.add_usage(token_counts)
@@ -278,7 +305,52 @@ async def openai_complete_if_cache(
                         f"Speed: {token_counts['total_tokens']/elapsed:.1f} tokens/s"
                     )
                 elif token_tracker:
-                    logger.debug("No usage information available in streaming response")
+                    logger.debug("No usage information available in streaming response, estimating tokens")
+                    # Fallback: Estimate tokens for streaming when usage is not available
+                    # This is a rough estimation
+                    prompt_text = " ".join([msg.get("content", "") for msg in messages if isinstance(msg.get("content"), str)])
+                    # Get completion text from accumulated content (this is approximate)
+                    estimated_prompt_tokens = len(prompt_text.split()) * 1.3  # Rough estimation
+                    estimated_completion_tokens = 50  # Default estimate, will be updated in practice
+                    
+                    token_counts = {
+                        "prompt_tokens": int(estimated_prompt_tokens),
+                        "completion_tokens": estimated_completion_tokens,
+                        "total_tokens": int(estimated_prompt_tokens) + estimated_completion_tokens
+                    }
+                    elapsed = max(time.time() - stream_start_time, 1e-6)
+                    
+                    # Use operation_type for fallback estimation too
+                    streaming_operation_type = operation_type
+                    if not streaming_operation_type or streaming_operation_type == 'general_completion':
+                        combined_prompt = f"{system_prompt or ''} {prompt}".lower()
+                        if "extract" in combined_prompt:
+                            streaming_operation_type = "entity_extraction"
+                        elif "relationship" in combined_prompt:
+                            streaming_operation_type = "relationship_extraction"
+                        elif "query" in combined_prompt or "question" in combined_prompt:
+                            streaming_operation_type = "query_response"
+                        else:
+                            streaming_operation_type = "streaming_completion"
+                    
+                    if hasattr(token_tracker, 'add_usage') and callable(token_tracker.add_usage):
+                        token_tracker.add_usage(
+                            token_counts=token_counts,
+                            call_time=elapsed,
+                            model_name=model,
+                            operation_type=streaming_operation_type
+                        )
+                    else:
+                        token_tracker.add_usage(token_counts)
+                    
+                    logger.info(
+                        f"OpenAI Streaming Usage (Estimated) - Model: {model}, Time: {elapsed:.2f}s, "
+                        f"Operation: {streaming_operation_type}, "
+                        f"Prompt: {token_counts['prompt_tokens']}, "
+                        f"Completion: {token_counts['completion_tokens']}, "
+                        f"Total: {token_counts['total_tokens']}, "
+                        f"Speed: {token_counts['total_tokens']/elapsed:.1f} tokens/s"
+                    )
             except Exception as e:
                 logger.error(f"Error in stream response: {str(e)}")
                 # Try to clean up resources if possible
@@ -355,8 +427,7 @@ async def openai_complete_if_cache(
                     f"Completion={token_counts['completion_tokens']}, Total={token_counts['total_tokens']}"
                 )
 
-                # Xác định operation_type như cũ…
-                operation_type = kwargs.get('operation_type', 'general_completion')
+                # Use operation_type extracted earlier, fallback to detection if not provided
                 if not operation_type or operation_type == 'general_completion':
                     combined_prompt = f"{system_prompt or ''} {prompt}".lower()
                     if "extract" in combined_prompt:

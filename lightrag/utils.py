@@ -1378,6 +1378,7 @@ async def use_llm_func_with_cache(
     cache_type: str = "extract",
     chunk_id: str | None = None,
     cache_keys_collector: list = None,
+    operation_type: str = None,
 ) -> str:
     """Call LLM function with cache support
 
@@ -1433,6 +1434,8 @@ async def use_llm_func_with_cache(
             kwargs["history_messages"] = history_messages
         if max_tokens is not None:
             kwargs["max_tokens"] = max_tokens
+        if operation_type is not None:
+            kwargs["operation_type"] = operation_type
 
         res: str = await use_llm_func(input_text, **kwargs)
         res = remove_think_tags(res)
@@ -1461,6 +1464,8 @@ async def use_llm_func_with_cache(
         kwargs["history_messages"] = history_messages
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
+    if operation_type is not None:
+        kwargs["operation_type"] = operation_type
 
     logger.info(f"Call LLM function with query text length: {len(input_text)}")
     res = await use_llm_func(input_text, **kwargs)

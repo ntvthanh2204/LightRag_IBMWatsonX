@@ -155,6 +155,7 @@ async def _handle_entity_relation_summary(
         llm_response_cache=llm_response_cache,
         # max_tokens=summary_max_tokens,
         cache_type="extract",
+        operation_type="summary_generation",
     )
     return summary
 
@@ -1590,6 +1591,7 @@ async def extract_entities(
             cache_type="extract",
             chunk_id=chunk_key,
             cache_keys_collector=cache_keys_collector,
+            operation_type="entity_extraction",
         )
 
         # Store LLM cache reference in chunk (will be handled by use_llm_func_with_cache)
@@ -1610,6 +1612,7 @@ async def extract_entities(
                 cache_type="extract",
                 chunk_id=chunk_key,
                 cache_keys_collector=cache_keys_collector,
+                operation_type="entity_extraction",
             )
 
             history += pack_user_ass_to_openai_messages(continue_prompt, glean_result)
@@ -1641,6 +1644,7 @@ async def extract_entities(
                 history_messages=history,
                 cache_type="extract",
                 cache_keys_collector=cache_keys_collector,
+                operation_type="entity_extraction",
             )
             if_loop_result = if_loop_result.strip().strip('"').strip("'").lower()
             if if_loop_result != "yes":
@@ -1822,11 +1826,32 @@ async def kg_query(
         f"[kg_query] Sending to LLM: {len_of_prompts:,} tokens (Query: {len(tokenizer.encode(query))}, System: {len(tokenizer.encode(sys_prompt))})"
     )
 
-    response = await use_model_func(
-        query,
-        system_prompt=sys_prompt,
-        stream=query_param.stream,
-    )
+    # Use cache wrapper for token logging
+    if query_param.stream:
+        # For streaming responses, use model func directly but log after completion
+        response = await use_model_func(
+            query,
+            system_prompt=sys_prompt,
+            stream=query_param.stream,
+            operation_type="query_response",
+        )
+    else:
+        # For non-streaming responses, use cache wrapper for token logging
+        # Create a wrapper function that includes system_prompt
+        async def model_func_with_system(text, **kwargs):
+            return await use_model_func(
+                text,
+                system_prompt=sys_prompt,
+                **kwargs
+            )
+        
+        response = await use_llm_func_with_cache(
+            query,
+            model_func_with_system,
+            llm_response_cache=hashing_kv,
+            cache_type="query",
+            operation_type="query_response",
+        )
     if isinstance(response, str) and len(response) > len(sys_prompt):
         response = (
             response.replace(sys_prompt, "")
@@ -3141,11 +3166,32 @@ async def naive_query(
         f"[naive_query] Sending to LLM: {len_of_prompts:,} tokens (Query: {len(tokenizer.encode(query))}, System: {len(tokenizer.encode(sys_prompt))})"
     )
 
-    response = await use_model_func(
-        query,
-        system_prompt=sys_prompt,
-        stream=query_param.stream,
-    )
+    # Use cache wrapper for token logging
+    if query_param.stream:
+        # For streaming responses, use model func directly but log after completion
+        response = await use_model_func(
+            query,
+            system_prompt=sys_prompt,
+            stream=query_param.stream,
+            operation_type="query_response",
+        )
+    else:
+        # For non-streaming responses, use cache wrapper for token logging
+        # Create a wrapper function that includes system_prompt
+        async def model_func_with_system(text, **kwargs):
+            return await use_model_func(
+                text,
+                system_prompt=sys_prompt,
+                **kwargs
+            )
+        
+        response = await use_llm_func_with_cache(
+            query,
+            model_func_with_system,
+            llm_response_cache=hashing_kv,
+            cache_type="query",
+            operation_type="query_response",
+        )
 
     if isinstance(response, str) and len(response) > len(sys_prompt):
         response = (
